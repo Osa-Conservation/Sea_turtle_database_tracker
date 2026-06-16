@@ -1,0 +1,197 @@
+---
+title: "Sea Turtle Database Exploration"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(googlesheets4)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(plotly)
+
+# Authenticate without prompting (uses GOOGLE_SERVICE_ACCOUNT_JSON secret in CI,
+# or your cached token locally — run gs4_auth() once on your machine first)
+
+if (Sys.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") != "") {
+  gs4_auth(path = Sys.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"))
+} else {
+  gs4_auth()  # uses cached token locally
+}
+
+sheet_id <- "1zOO7FV_caqNCEn9OUmxF5kKYrCUEO0liPwRCGqR7QnE"
+```
+
+# Load the three sheets
+
+```{r load}
+db <- read_sheet(sheet_id, sheet = "Sea Turtle Database") %>%
+  rename(date = `Activity Date YYYY-MM-DD`,
+         species = Species) %>%
+  mutate(date = as.Date(date))
+
+effort <- read_sheet(sheet_id, sheet = "Effort") %>%
+  rename(date = `patrol date \r\n(YYYY-MM-DD)`) %>%
+  mutate(date = as.Date(date))
+
+# Convert to minutes
+effort$time_on_patrol_mins <- as.numeric(effort$`time on patrol`) * 24 * 60
+
+hatchery <- read_sheet(sheet_id, sheet = "Hatchery") %>%
+  rename(date = `Relocation Date (clean)`,
+         species = Species) %>%
+  mutate(date = as.Date(date))
+```
+
+# Observations through time
+
+Each point is one record (database row) on the date it was logged. Useful for spotting gaps and overlaps in coverage across the three sources.
+
+```{r through-time, fig.height=7}
+obs_long <- bind_rows(
+  db       %>% transmute(date, sheet = "Sea Turtle Database"),
+  effort   %>% transmute(date, sheet = "Effort"),
+  hatchery %>% transmute(date, sheet = "Hatchery")
+) %>%
+  filter(!is.na(date)) %>%
+  count(sheet, date, name = "n")
+
+obs_long$sheet <- factor(obs_long$sheet,
+                         levels = c("Sea Turtle Database", "Effort", "Hatchery"))
+
+p_list <- lapply(levels(obs_long$sheet), function(s) {
+  plot_ly(obs_long %>% filter(sheet == s),
+          x = ~date, y = ~n,
+          type = "scatter", mode = "markers",
+          marker = list(size = 5, opacity = 0.6),
+          name = s,
+          hovertemplate = paste0(s, "<br>%{x|%Y-%m-%d}<br>%{y} records<extra></extra>")) %>%
+    layout(yaxis = list(title = s))
+})
+
+subplot(p_list, nrows = 3, shareX = TRUE, titleY = TRUE) %>%
+  layout(title = "Records through time — by sheet",
+         showlegend = FALSE)
+```
+
+# Total records (database rows) per year — all three sheets together
+
+Click any line in the legend to toggle it on/off. This is the view for checking when effort and records line up.
+
+```{r yearly-totals}
+yearly <- bind_rows(
+  db       %>% transmute(date, sheet = "Sea Turtle Database"),
+  effort   %>% transmute(date, sheet = "Effort"),
+  hatchery %>% transmute(date, sheet = "Hatchery")
+) %>%
+  filter(!is.na(date)) %>%
+  mutate(year = year(date)) %>%
+  count(sheet, year, name = "records")
+
+plot_ly(yearly,
+        x = ~year, y = ~records,
+        color = ~sheet, colors = "Set1",
+        type = "scatter", mode = "lines+markers",
+        hovertemplate = "%{x}<br>%{y} records<extra>%{fullData.name}</extra>") %>%
+  layout(
+    title = "Total records per year by sheet",
+    xaxis = list(title = "Year", dtick = 1),
+    yaxis = list(title = "Records"),
+    legend = list(title = list(text = "<b>Click to toggle</b>"))
+  )
+```
+
+# Species detected per survey night through time
+
+Counts of nesting/sighting records per night, coloured by species. Toggle species in the legend.
+
+```{r species-per-night}
+db_factor <- db
+db_factor$date <- as.factor(db_factor$date)
+db_factor$species <- as.factor(db_factor$species)
+
+species_nightly <- db_factor %>%
+  filter(!is.na(date), !is.na(species), species != "") %>%
+  count(date, species, name = "records", .drop = FALSE)
+
+species_nightly$date <- ymd(species_nightly$date)
+
+plot_ly(species_nightly,
+        x = ~date, y = ~records,
+        color = ~species, colors = "Dark2",
+        mode = "lines",
+        marker = list(size = 4, opacity = 0.7),
+        hovertemplate = "%{x|%Y-%m-%d}<br>%{y} records<extra>%{fullData.name}</extra>") %>%
+  layout(
+    title = "Records per survey night",
+    xaxis = list(title = ""),
+    yaxis = list(title = "Records per night"),
+    legend = list(title = list(text = "<b>Species</b>"))
+  )
+```
+
+# Effort through time
+
+Using the start and end times in the database we can look at person hours per day.
+
+```{r effort}
+effort_factor <- effort
+effort_factor$date <- as.factor(effort_factor$date)
+daily_effort <- effort_factor %>%
+  group_by(date, .drop = FALSE) %>%
+  summarise(total_effort = sum(time_on_patrol_mins))
+
+daily_effort$date <- ymd(daily_effort$date)
+
+plot_ly(daily_effort,
+        x = ~date, y = ~total_effort,
+        mode = "lines",
+        marker = list(size = 4, opacity = 0.7),
+        hovertemplate = "%{x|%Y-%m-%d}<br>%{y} minutes<extra></extra>") %>%
+  layout(
+    title = "Survey duration per day",
+    xaxis = list(title = ""),
+    yaxis = list(title = "Minutes")
+  )
+```
+
+# Records per unit of time (minutes)
+
+```{r encounter-rate}
+tmp <- db[!is.na(db$species), ] %>% group_by(date) %>% summarise(n())
+
+encounter_rate <- left_join(daily_effort, tmp)
+encounter_rate$`n()`[is.na(encounter_rate$`n()`)] <- 0
+encounter_rate$rate_hr <- encounter_rate$`n()` / (encounter_rate$total_effort / 60)
+
+encounter_rate <- encounter_rate[!is.na(encounter_rate$rate_hr), ]
+encounter_rate <- encounter_rate[encounter_rate$rate_hr < 1000, ]
+
+plot_ly(encounter_rate,
+        x = ~date, y = ~rate_hr,
+        mode = "lines",
+        marker = list(size = 4, opacity = 0.7),
+        hovertemplate = "%{x|%Y-%m-%d}<br>%{y} encounters per hr<extra></extra>") %>%
+  layout(
+    title = "Records per hour",
+    xaxis = list(title = ""),
+    yaxis = list(title = "Records per hour of survey")
+  )
+```
+
+Some of those look wildly implausible!
+
+```{r encounter-hist}
+plot_ly(encounter_rate, y = ~rate_hr, type = "histogram")
+```
+
+Which dates have the really high rates?
+
+```{r high-rates}
+tmp <- encounter_rate[encounter_rate$rate_hr > 20, ]
+tmp[order(tmp$rate_hr, decreasing = TRUE), ]
+```

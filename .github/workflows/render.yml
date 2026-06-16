@@ -1,0 +1,77 @@
+name: Render & Deploy
+
+on:
+  schedule:
+    - cron: "0 0 * * *"   # midnight UTC every night
+  workflow_dispatch:        # allows manual trigger from GitHub UI
+
+jobs:
+  render-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.4"
+
+      - name: Cache R packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.R_LIBS_USER }}
+          key: ${{ runner.os }}-r-4.4-${{ hashFiles('DESCRIPTION') }}
+          restore-keys: ${{ runner.os }}-r-4.4-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev pandoc
+
+      - name: Install R packages
+        run: |
+          Rscript -e "install.packages(c('rmarkdown', 'googlesheets4', 'dplyr', 'tidyr', 'lubridate', 'plotly'), repos = 'https://cloud.r-project.org')"
+
+      - name: Write Google service account key
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > /tmp/sa_key.json
+
+      - name: Render Rmd
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: /tmp/sa_key.json
+        run: |
+          Rscript -e "rmarkdown::render('Database_exploration.Rmd', output_file = 'docs/index.html')"
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
+          publish_branch: gh-pages
+
+  notify-on-failure:
+    needs: render-and-deploy
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.NOTIFY_EMAIL_ADDRESS }}
+          password: ${{ secrets.NOTIFY_EMAIL_PASSWORD }}
+          subject: "❌ Sea Turtle Dashboard render failed"
+          body: |
+            The nightly render of the Sea Turtle Database dashboard failed.
+
+            Check the logs here:
+            https://github.com/${{ github.repository }}/actions
+
+            Triggered at: ${{ github.event.head_commit.timestamp }}
+          to: ${{ secrets.NOTIFY_EMAIL_ADDRESS }}
+          from: Sea Turtle Dashboard
