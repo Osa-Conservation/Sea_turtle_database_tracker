@@ -29,22 +29,21 @@ sheet_id <- "1zOO7FV_caqNCEn9OUmxF5kKYrCUEO0liPwRCGqR7QnE"
 # Load the three sheets
 
 ```{r load}
-db <- read_sheet(sheet_id, sheet = "Sea Turtle Database") %>%
-  rename(date = `Activity Date YYYY-MM-DD`,
+db <- read_sheet(sheet_id, sheet = "Sea Turtle Database") %>% 
+   rename(date = `Activity Date YYYY-MM-DD`,
          species = Species) %>%
-  mutate(date = as.Date(date))
+  mutate(date = ymd(date))
 
-effort <- read_sheet(sheet_id, sheet = "Effort") %>%
-  rename(date = `patrol date \r\n(YYYY-MM-DD)`) %>%
-  mutate(date = as.Date(date))
+effort <- read_sheet(sheet_id, sheet = "Effort", col_types="c") %>%
+  rename(date = `patrol date YYYY-MM-DD`) %>%
+  mutate(date = ymd(date))
 
-# Convert to minutes
-effort$time_on_patrol_mins <- as.numeric(effort$`time on patrol`) * 24 * 60
+effort$time_on_patrol_mins <- (as.numeric(substr(effort$`time on patrol HH:MM:SS`,1,2))*60) + as.numeric(substr(effort$`time on patrol HH:MM:SS`,4,5))
 
 hatchery <- read_sheet(sheet_id, sheet = "Hatchery") %>%
-  rename(date = `Relocation Date (clean)`,
+  rename(date = `Relocation Date YYYY-MM-DD`,
          species = Species) %>%
-  mutate(date = as.Date(date))
+  mutate(date = ymd(date))
 ```
 
 # Observations through time
