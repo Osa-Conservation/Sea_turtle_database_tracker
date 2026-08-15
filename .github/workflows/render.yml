@@ -1,6 +1,7 @@
 name: Render & Deploy
 
 on:
+  push:
   schedule:
     - cron: "0 0 * * *"   # midnight UTC every night
   workflow_dispatch:        # allows manual trigger from GitHub UI
