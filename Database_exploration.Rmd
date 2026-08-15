@@ -29,21 +29,36 @@ sheet_id <- "1zOO7FV_caqNCEn9OUmxF5kKYrCUEO0liPwRCGqR7QnE"
 # Load the three sheets
 
 ```{r load}
-db <- read_sheet(sheet_id, sheet = "Sea Turtle Database") %>% 
-   rename(date = `Activity Date YYYY-MM-DD`,
-         species = Species) %>%
-  mutate(date = ymd(date))
+db <- read_sheet(sheet_id, sheet = "Nesting activity (Census)", col_types = "c")  
+  #Standardise
+  colnames(db)[colnames(db)=="Activity Date YYYY-MM-DD"] <- "date"
+  db$date <- ymd(db$date)
+  
+effort <- read_sheet(sheet_id, sheet = "Effort", col_types="c") 
+  #Standardise
+  colnames(effort)[colnames(effort)=="Activity Date YYYY-MM-DD"] <- "date"
+  effort$date <- ymd(effort$date)
+  
+hatchery <- read_sheet(sheet_id, sheet = "Hatchery actual", col_types="c") 
+  #Standardise
+  colnames(hatchery)[colnames(hatchery)=="Activity Date YYYY-MM-DD"] <- "date"
+  hatchery$date <- ymd(hatchery$date)
+  
+turtle_monitoring <- read_sheet(sheet_id, sheet = "Turtle monitoring", col_types="c")
+  #Standardise
+  colnames(turtle_monitoring)[colnames(turtle_monitoring)=="Activity Date YYYY-MM-DD"] <- "date"
+  turtle_monitoring$date <- ymd(turtle_monitoring$date)
+  
+  
+wild_nests <- read_sheet(sheet_id, sheet = "Wild Nests", col_types="c")
+  #Standardise
+  colnames(wild_nests)[colnames(wild_nests)=="Date"] <- "date"
+  wild_nests$date <- ymd(wild_nests$date)
+  
+# str(db)
 
-effort <- read_sheet(sheet_id, sheet = "Effort", col_types="c") %>%
-  rename(date = `patrol date YYYY-MM-DD`) %>%
-  mutate(date = ymd(date))
 
-effort$time_on_patrol_mins <- (as.numeric(substr(effort$`time on patrol HH:MM:SS`,1,2))*60) + as.numeric(substr(effort$`time on patrol HH:MM:SS`,4,5))
 
-hatchery <- read_sheet(sheet_id, sheet = "Hatchery") %>%
-  rename(date = `Relocation Date YYYY-MM-DD`,
-         species = Species) %>%
-  mutate(date = ymd(date))
 ```
 
 # Observations through time
@@ -52,15 +67,18 @@ Each point is one record (database row) on the date it was logged. Useful for sp
 
 ```{r through-time, fig.height=7}
 obs_long <- bind_rows(
-  db       %>% transmute(date, sheet = "Sea Turtle Database"),
+  db       %>% transmute(date, sheet = "Nesting_activity"),
   effort   %>% transmute(date, sheet = "Effort"),
-  hatchery %>% transmute(date, sheet = "Hatchery")
+  hatchery %>% transmute(date, sheet = "Hatchery"),
+  turtle_monitoring %>% transmute(date, sheet = "Turtle_monitoring"),
+  wild_nests %>% transmute(date, sheet = "Wild_nests")
 ) %>%
   filter(!is.na(date)) %>%
   count(sheet, date, name = "n")
 
+
 obs_long$sheet <- factor(obs_long$sheet,
-                         levels = c("Sea Turtle Database", "Effort", "Hatchery"))
+                         levels = c("Nesting_activity", "Effort", "Hatchery", "Turtle_monitoring", "Wild_nests"))
 
 p_list <- lapply(levels(obs_long$sheet), function(s) {
   plot_ly(obs_long %>% filter(sheet == s),
@@ -72,7 +90,7 @@ p_list <- lapply(levels(obs_long$sheet), function(s) {
     layout(yaxis = list(title = s))
 })
 
-subplot(p_list, nrows = 3, shareX = TRUE, titleY = TRUE) %>%
+subplot(p_list, nrows = 5, shareX = TRUE, titleY = TRUE) %>%
   layout(title = "Records through time — by sheet",
          showlegend = FALSE)
 ```
@@ -83,9 +101,11 @@ Click any line in the legend to toggle it on/off. This is the view for checking 
 
 ```{r yearly-totals}
 yearly <- bind_rows(
-  db       %>% transmute(date, sheet = "Sea Turtle Database"),
+  db       %>% transmute(date, sheet = "Nesting_activity"),
   effort   %>% transmute(date, sheet = "Effort"),
-  hatchery %>% transmute(date, sheet = "Hatchery")
+  hatchery %>% transmute(date, sheet = "Hatchery"),
+  turtle_monitoring %>% transmute(date, sheet = "Turtle_monitoring"),
+  wild_nests %>% transmute(date, sheet = "Wild_nests")
 ) %>%
   filter(!is.na(date)) %>%
   mutate(year = year(date)) %>%
@@ -111,7 +131,7 @@ Counts of nesting/sighting records per night, coloured by species. Toggle specie
 ```{r species-per-night}
 db_factor <- db
 db_factor$date <- as.factor(db_factor$date)
-db_factor$species <- as.factor(db_factor$species)
+db_factor$species <- as.factor(db_factor$Species)
 
 species_nightly <- db_factor %>%
   filter(!is.na(date), !is.na(species), species != "") %>%
@@ -140,9 +160,15 @@ Using the start and end times in the database we can look at person hours per da
 ```{r effort}
 effort_factor <- effort
 effort_factor$date <- as.factor(effort_factor$date)
+
+time_obj <- hm(effort_factor$`time on patrol HH:MM`)
+
+# Convert to total minutes
+effort_factor$total_minutes <- as.numeric(time_obj, "minutes")
+
 daily_effort <- effort_factor %>%
   group_by(date, .drop = FALSE) %>%
-  summarise(total_effort = sum(time_on_patrol_mins))
+  summarise(total_effort = sum(total_minutes))
 
 daily_effort$date <- ymd(daily_effort$date)
 
@@ -161,7 +187,7 @@ plot_ly(daily_effort,
 # Records per unit of time (minutes)
 
 ```{r encounter-rate}
-tmp <- db[!is.na(db$species), ] %>% group_by(date) %>% summarise(n())
+tmp <- db[!is.na(db$Species), ] %>% group_by(date) %>% summarise(n())
 
 encounter_rate <- left_join(daily_effort, tmp)
 encounter_rate$`n()`[is.na(encounter_rate$`n()`)] <- 0
@@ -180,9 +206,10 @@ plot_ly(encounter_rate,
     xaxis = list(title = ""),
     yaxis = list(title = "Records per hour of survey")
   )
+
 ```
 
-Some of those look wildly implausible!
+Some of those look wildly implausible! But... Could they be arribadas?
 
 ```{r encounter-hist}
 plot_ly(encounter_rate, y = ~rate_hr, type = "histogram")
